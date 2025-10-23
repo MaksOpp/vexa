@@ -284,6 +284,7 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      logger.error(f"Unexpected pipeline error storing segments for message {message_id}: {pipe_err}", exc_info=True)
                      return False
                 # Publish mutable transcript update via Redis Pub/Sub (quick win)
+                logger.info(f"[DEBUG] About to publish WebSocket update. User: {user}, Platform: {platform_val}, Native ID: {native_meeting_id}, Segments: {len(segments_to_store)}")
                 try:
                     updated_segments = []
                     for k, v in segments_to_store.items():
@@ -315,7 +316,9 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                         "ts": datetime.now(timezone.utc).isoformat()
                     }
                     channel = f"tc:meeting:{user.id}:{platform_val}:{native_meeting_id}:mutable"
-                    await redis_c.publish(channel, json.dumps(event_payload))
+                    logger.info(f"[WebSocket] Publishing {len(updated_segments)} segments to channel: {channel}")
+                    num_subscribers = await redis_c.publish(channel, json.dumps(event_payload))
+                    logger.info(f"[WebSocket] Published to {num_subscribers} subscribers on channel: {channel}")
                 except Exception as pub_err:
                     logger.error(f"Failed to publish mutable transcript update for meeting {internal_meeting_id}: {pub_err}")
             else:

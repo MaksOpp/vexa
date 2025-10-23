@@ -108,9 +108,23 @@ class TranscriptRenderer:
         
         updated_count = 0
         for segment in segments:
-            abs_start = segment.get('absolute_start_time')
+            # Try absolute_start_time first, fallback to 'start' field
+            abs_start = segment.get('absolute_start_time') or segment.get('start')
             if not abs_start or not segment.get('text', '').strip():
                 continue
+            
+            # Convert numeric timestamp to ISO string if needed
+            if isinstance(abs_start, (int, float)):
+                abs_start = datetime.fromtimestamp(abs_start / 1000, tz=None).isoformat()
+            
+            # Ensure absolute_start_time and absolute_end_time are set for rendering
+            if 'absolute_start_time' not in segment and 'start' in segment:
+                segment['absolute_start_time'] = abs_start
+            if 'absolute_end_time' not in segment:
+                end_time = segment.get('end_time') or segment.get('end') or segment.get('start')
+                if isinstance(end_time, (int, float)):
+                    end_time = datetime.fromtimestamp(end_time / 1000, tz=None).isoformat()
+                segment['absolute_end_time'] = end_time
             
             # Deduplication logic: keep newer updated_at timestamp (algorithm step 2)
             existing = self.transcript_by_abs_start.get(abs_start)
@@ -216,20 +230,18 @@ class TranscriptRenderer:
             if not text:
                 continue
             
-            if current_group and current_group['speaker'] == speaker:
-                # Merge with current group
-                current_group['text'] += ' ' + text
-                current_group['end_time'] = end_time
-            else:
-                # Start new group
-                if current_group:
-                    groups.append(current_group)
-                current_group = {
-                    'speaker': speaker,
-                    'text': text,
-                    'start_time': start_time,
-                    'end_time': end_time
-                }
+            # DON'T group consecutive segments from same speaker - each 5-second snapshot is separate
+            # This prevents the cumulative text merging issue
+            if current_group:
+                groups.append(current_group)
+            
+            # Always start a new group for each segment (no merging)
+            current_group = {
+                'speaker': speaker,
+                'text': text,
+                'start_time': start_time,
+                'end_time': end_time
+            }
         
         if current_group:
             groups.append(current_group)

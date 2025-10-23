@@ -342,4 +342,124 @@ export const googlePeopleButtonSelectors: string[] = [
   'button[data-tooltip*="Participants"]'
 ];
 
+// Google Meet caption button selectors (to enable captions)
+export const googleCaptionButtonSelectors: string[] = [
+  // MOST UNIVERSAL: Find by specific tooltip ID pattern (very stable)
+  'button[data-tooltip-id^="ucc-"]',  // All Google Meet buttons have unique tooltip IDs
+  
+  // Icon-based (most reliable - icon name doesn't change)
+  'button i:text("closed_caption")',
+  'button i:text("closed_caption_off")',
+  'i.google-symbols:text("closed_caption")',
+  'i.google-symbols:text("closed_caption_off")',
+  
+  // jsname attribute (pretty stable)
+  'button[jsname="r8qRAd"]',
+  
+  // Multi-language aria-label patterns (with shortcut hint)
+  'button[aria-label*="(C lub Shift+C)"]',  // Polish with shortcut
+  'button[aria-label*="(c or shift+c)" i]', // English with shortcut  
+  'button[aria-label*="(C ou Maj+C)" i]',   // French with shortcut
+  
+  // English patterns
+  'button[aria-label*="Turn on captions"]',
+  'button[aria-label*="Turn off captions"]',
+  'button[aria-label*="turn on captions" i]',
+  'button[aria-label*="turn off captions" i]',
+  
+  // Polish
+  'button[aria-label*="Włącz napisy"]',
+  'button[aria-label*="Wyłącz napisy"]',
+  'button[aria-label*="napisy" i]',
+  
+  // French
+  'button[aria-label*="sous-titres" i]',
+  'button[aria-label*="activer les sous-titres" i]',
+  
+  // German
+  'button[aria-label*="untertitel" i]',
+  
+  // Spanish/Portuguese
+  'button[aria-label*="subtítulos" i]',
+  'button[aria-label*="legendas" i]',
+  
+  // Generic patterns
+  'button[aria-label*="caption" i]',
+  'button[aria-label*="subtitle" i]',
+  
+  // Toolbar-specific
+  '[role="toolbar"] button[aria-label*="caption" i]',
+  
+  // CC button
+  'button[aria-label*="CC"]'
+];
+
+// Google Meet caption container selectors (where captions appear)
+export const googleCaptionContainerSelectors: string[] = [
+  // MOST RELIABLE: Stable aria-label selectors (language-specific but stable across UI changes)
+  // NOTE: Using single quotes for outer string, double quotes for attribute values
+  "div[role='region'][aria-label*='Napisy']",     // Polish: Captions (exact case)
+  "div[role='region'][aria-label*='napisy']",     // Polish: captions (lowercase)
+  "div[role='region'][aria-label*='Captions']",   // English: Captions
+  "div[role='region'][aria-label*='captions']",   // English: captions (lowercase)
+  "div[role='region'][aria-label*='Subtitles']",  // English: Subtitles
+  "div[role='region'][aria-label*='subtitles']",  // English: subtitles (lowercase)
+  
+  // Other languages
+  "div[role='region'][aria-label*='sous-titres']", // French
+  "div[role='region'][aria-label*='Untertitel']",  // German
+  "div[role='region'][aria-label*='subtítulos']",  // Spanish/Portuguese
+  "div[role='region'][aria-label*='sottotitoli']", // Italian
+  "div[role='region'][aria-label*='字幕']",        // Chinese/Japanese
+  
+  // Stable jsname attribute (pretty reliable)
+  "[jsname='dsyhDe']",  // Primary Google Meet caption container (2024)
+  
+  // Class-based selectors (less reliable, may change)
+  ".iOzk7",              // Caption wrapper class (2024)
+  "div.vNKgIf.UDinHf",   // Combined caption container classes (2024)
+  "div.vNKgIf",          // Caption container class
+  "div.UDinHf",          // Another caption container class
+  
+  // Individual caption entry (fallback)
+  '.nMcdL',              // Individual caption entry container (2024)
+  
+  // Legacy/alternative selectors
+  '.a4cQT',              // Alternative caption class
+  '.TBMuR',              // Caption text container
+  '.iTTPOb',             // Another caption container class
+  '.cnXSBc',             // Caption display class
+  'div[jsname="tgaKEf"]', // Alternative jsname for captions
+  
+  // LEAST RELIABLE: Generic live regions (ONLY as last resort - can match UI notifications!)
+  // These are commented out to prevent false matches
+  // '[aria-live="polite"]',
+  // '[aria-live="assertive"]',
+  // 'div[role="alert"]'
+];
+
+// Google Meet caption text element selectors
+export const googleCaptionTextSelectors: string[] = [
+  '.ygicle',             // Primary caption text class (2024)
+  '.VbkSUe',             // Secondary caption text class (2024)
+  'div.ygicle.VbkSUe',   // Combined caption text classes (2024)
+  'span.iTTPOb',         // Direct caption text span (legacy)
+  'span[jsname]',        // Caption text with jsname
+  '.TBMuR span',         // Span within caption container
+  '[role="alert"] span', // Span within alert role
+  'span'                 // Fallback to any span
+];
+
+// Google Meet caption speaker label selectors
+export const googleCaptionSpeakerSelectors: string[] = [
+  'span.NWpY1d',          // Primary speaker name class (2024)
+  '.adE6rb span.NWpY1d',  // Nested speaker in image container (2024)
+  '.KcIKyf span.NWpY1d',  // Speaker in info container (2024)
+  'span[data-speaker-name]',  // If Google adds speaker attributes
+  'span.speaker-label',       // Common speaker label class
+  'div[data-participant-name]', // Participant name in caption
+  'span:first-child',         // Often speaker is first element
+  '.speaker-name'             // Generic speaker name class
+];
+
 
