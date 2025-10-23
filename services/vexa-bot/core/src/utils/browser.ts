@@ -717,7 +717,7 @@ export class BrowserCaptionService {
       // Google Meet caption structure (as of 2024):
       // Container has multiple caption entries, we want the LAST (most recent) one
       // Each entry: <div class="nMcdL bj4p3b">
-      //   - Speaker: <span class="NWpY1d">Speaker Name</span>
+      //   - Speaker info container: <div> with <img> (avatar) and name span
       //   - Text: <div class="ygicle VbkSUe">Caption text here</div>
       
       // Find all caption entries (individual caption blocks)
@@ -737,32 +737,7 @@ export class BrowserCaptionService {
         return null;
       }
 
-      // Extract speaker name from the entry
-      // Try multiple selectors for speaker
-      const speakerSelectors = [
-        '.NWpY1d',          // Primary Google Meet speaker class
-        '.adE6rb .NWpY1d',  // Nested speaker
-        'span.NWpY1d',      // Specific span with speaker class
-        '.speaker-name',    // Generic speaker class
-        '[data-speaker-name]' // Data attribute
-      ];
-
-      for (const selector of speakerSelectors) {
-        try {
-          const speakerElement = targetEntry.querySelector(selector) as HTMLElement;
-          if (speakerElement) {
-            speakerName = speakerElement.textContent?.trim() || null;
-            if (speakerName) {
-              (window as any).logBot(`[Caption] Found speaker using selector ${selector}: ${speakerName}`);
-              break;
-            }
-          }
-        } catch (e) {
-          // Try next selector
-        }
-      }
-
-      // Extract caption text from the entry
+      // ROBUST APPROACH: Extract caption text first (it's easier to identify)
       // Try multiple selectors for caption text
       const textSelectors = [
         '.ygicle',          // Primary Google Meet caption text class
@@ -772,12 +747,15 @@ export class BrowserCaptionService {
         '[class*="ygicle"]' // Partial match
       ];
 
+      let captionTextElement: HTMLElement | null = null;
+
       for (const selector of textSelectors) {
         try {
           const textElement = targetEntry.querySelector(selector) as HTMLElement;
           if (textElement) {
             captionText = textElement.textContent?.trim() || '';
             if (captionText) {
+              captionTextElement = textElement;
               (window as any).logBot(`[Caption] Found text using selector ${selector}: ${captionText.substring(0, 50)}...`);
               break;
             }
@@ -787,14 +765,122 @@ export class BrowserCaptionService {
         }
       }
 
-      // If no text found with specific selectors, try getting all text from entry
-      // but exclude the speaker name element
-      if (!captionText) {
-        captionText = targetEntry.textContent?.trim() || '';
+      // ROBUST SPEAKER EXTRACTION:
+      // Strategy 1: Find the container with avatar image, then get adjacent text
+      // This is more robust as avatar images are structural elements
+      const avatarImg = targetEntry.querySelector('img[src*="googleusercontent.com"]') as HTMLImageElement;
+      
+      if (avatarImg) {
+        (window as any).logBot(`[Caption] Found avatar image, searching for speaker name nearby...`);
         
-        // Remove speaker name from text if it's at the start
-        if (speakerName && captionText.startsWith(speakerName)) {
-          captionText = captionText.substring(speakerName.length).trim();
+        // The speaker name is typically in a sibling div next to or near the image
+        // Look for text in the same parent or nearby containers, excluding the caption text
+        let searchRoot = avatarImg.parentElement;
+        let attempts = 0;
+        
+        // Walk up the DOM tree a bit to find the common parent
+        while (searchRoot && attempts < 3) {
+          // Get all text content from this level
+          const textNodes: string[] = [];
+          
+          // Find all text-containing elements
+          const allElements = searchRoot.querySelectorAll('*');
+          allElements.forEach((el: Element) => {
+            const element = el as HTMLElement;
+            // Skip if this is the caption text element
+            if (captionTextElement && (element === captionTextElement || captionTextElement.contains(element))) {
+              return;
+            }
+            
+            // Get direct text content (not from children)
+            const text = Array.from(element.childNodes)
+              .filter((node: ChildNode) => node.nodeType === Node.TEXT_NODE)
+              .map((node: ChildNode) => node.textContent?.trim() || '')
+              .join(' ')
+              .trim();
+            
+            if (text && text.length > 0 && text.length < 100) {
+              textNodes.push(text);
+            }
+            
+            // Also check spans with text content (likely speaker name)
+            if (element.tagName === 'SPAN' && element.childNodes.length > 0) {
+              const spanText = element.textContent?.trim() || '';
+              if (spanText && spanText.length > 0 && spanText.length < 100 && 
+                  spanText !== captionText && !textNodes.includes(spanText)) {
+                textNodes.push(spanText);
+              }
+            }
+          });
+          
+          // Filter out empty strings and the caption text
+          const candidateNames = textNodes.filter(text => 
+            text !== captionText && 
+            text.length > 0 && 
+            text.length < 100 &&
+            !text.includes('googleusercontent.com') // Exclude URLs
+          );
+          
+          if (candidateNames.length > 0) {
+            // Usually the first valid text near an avatar is the speaker name
+            speakerName = candidateNames[0];
+            (window as any).logBot(`[Caption] Found speaker name near avatar: ${speakerName}`);
+            break;
+          }
+          
+          searchRoot = searchRoot.parentElement;
+          attempts++;
+        }
+      }
+      
+      // Strategy 2: Fallback to finding text elements that are NOT the caption text
+      if (!speakerName && captionTextElement) {
+        (window as any).logBot(`[Caption] Avatar method failed, trying structural text extraction...`);
+        
+        // Get all text from the entry
+        const allText = targetEntry.textContent?.trim() || '';
+        
+        // If the entry contains more text than just the caption, the extra text is likely the speaker
+        if (allText !== captionText) {
+          // Try to extract the speaker name by removing the caption text
+          let possibleSpeaker = allText.replace(captionText, '').trim();
+          
+          // Clean up any extra whitespace
+          possibleSpeaker = possibleSpeaker.replace(/\s+/g, ' ').trim();
+          
+          // Check if it looks like a reasonable name (not too long, not empty)
+          if (possibleSpeaker && possibleSpeaker.length > 0 && possibleSpeaker.length < 100) {
+            speakerName = possibleSpeaker;
+            (window as any).logBot(`[Caption] Extracted speaker by text diff: ${speakerName}`);
+          }
+        }
+      }
+      
+      // Strategy 3: Last resort - try class-based selectors (less robust but better than nothing)
+      if (!speakerName) {
+        (window as any).logBot(`[Caption] Structural methods failed, falling back to class selectors...`);
+        
+        const speakerSelectors = [
+          '.NWpY1d',          // Primary Google Meet speaker class (less robust)
+          '.adE6rb .NWpY1d',  // Nested speaker
+          'span.NWpY1d',      // Specific span with speaker class
+          '.speaker-name',    // Generic speaker class
+          '[data-speaker-name]' // Data attribute
+        ];
+
+        for (const selector of speakerSelectors) {
+          try {
+            const speakerElement = targetEntry.querySelector(selector) as HTMLElement;
+            if (speakerElement) {
+              speakerName = speakerElement.textContent?.trim() || null;
+              if (speakerName) {
+                (window as any).logBot(`[Caption] Found speaker using fallback selector ${selector}: ${speakerName}`);
+                break;
+              }
+            }
+          } catch (e) {
+            // Try next selector
+          }
         }
       }
 

@@ -207,6 +207,8 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                      end_time_float = float(segment['end'])
                      text_content = segment.get('text') or ""
                      language_content = segment.get('language')
+                     # IMPORTANT: Extract original speaker from caption (if present)
+                     original_speaker = segment.get('speaker')
                  except (ValueError, TypeError) as time_err:
                      logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}] Skipping segment {i} invalid time format: {time_err} - Segment: {segment}")
                      continue
@@ -224,9 +226,11 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                  start_time_key = f"{start_time_float:.3f}"
                  
                  mapping_status: str = STATUS_UNKNOWN
+                 # Start with original speaker from caption (if available)
+                 final_speaker = original_speaker
 
                  if session_uid_from_payload:
-                    # MODIFIED: Call the new utility function
+                    # MODIFIED: Call the new utility function for speaker event mapping
                     context_log = f"[LiveMap Msg:{message_id}/Meet:{internal_meeting_id}/Seg:{start_time_key}]"
                     mapping_result = await get_speaker_mapping_for_segment(
                         redis_c=redis_c,
@@ -238,21 +242,33 @@ async def process_stream_message(message_id: str, message_data: Dict[str, Any], 
                     )
                     mapped_speaker_name = mapping_result.get("speaker_name")
                     mapping_status = mapping_result.get("status", STATUS_ERROR) # Default to STATUS_ERROR if not present
+                    
+                    # PREFERENCE: Use speaker event mapping if available, otherwise keep original speaker from caption
+                    if mapped_speaker_name:
+                        final_speaker = mapped_speaker_name
+                        logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] Using mapped speaker: {mapped_speaker_name}")
+                    elif original_speaker:
+                        logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No speaker event mapping, using original speaker from caption: {original_speaker}")
                  else:
                     # This case is now handled inside get_speaker_mapping_for_segment if session_uid is None,
                     # but keeping explicit handling here is also fine for clarity if session_uid_from_payload is None from the start.
-                    logger.warning(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No session_uid_from_payload. Cannot map speakers.")
+                    if original_speaker:
+                        logger.debug(f"[Msg {message_id}/Meet {internal_meeting_id}/Seg {start_time_key}] No session_uid_from_payload. Using original speaker from caption: {original_speaker}")
                     mapping_status = STATUS_UNKNOWN
 
+                 # Build segment data - only include speaker if we have a valid value
                  segment_redis_data = {
                      "text": text_content,
                      "end_time": end_time_float,
                      "language": language_content,
                      "updated_at": datetime.now(timezone.utc).isoformat(), 
                      "session_uid": session_uid_from_payload,
-                     "speaker": mapped_speaker_name,
                      "speaker_mapping_status": mapping_status
                  }
+                 
+                 # Only include speaker field if we have a valid speaker name
+                 if final_speaker:
+                     segment_redis_data["speaker"] = final_speaker
                  # Compute absolute UTC timestamps if session start time is known
                  if session_start_utc is not None:
                      try:
