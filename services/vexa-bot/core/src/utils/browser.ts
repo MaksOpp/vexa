@@ -530,3 +530,408 @@ export class BrowserWhisperLiveService {
     }
   }
 }
+
+/**
+ * BrowserCaptionService - Monitors and extracts Google Meet native captions
+ */
+export class BrowserCaptionService {
+  private captionContainer: HTMLElement | null = null;
+  private mutationObserver: MutationObserver | null = null;
+  private sessionStartTime: number | null = null;
+  private lastCaptionText: string = '';
+  private lastCaptionTimestamp: number = 0;
+  private captionSequenceStartTime: number = 0; // Track start of current caption sequence
+  private captionSegmentId: number = 0;
+  private config: any;
+  private currentSpeaker: string = 'Unknown Speaker';
+
+  constructor(config: any) {
+    this.config = config;
+  }
+
+  /**
+   * Find caption container element using multiple selectors
+   */
+  async findCaptionContainer(
+    containerSelectors: string[],
+    retries: number = 10,
+    delay: number = 1000
+  ): Promise<HTMLElement | null> {
+    for (let attempt = 0; attempt < retries; attempt++) {
+      for (const selector of containerSelectors) {
+        try {
+          const element = document.querySelector(selector) as HTMLElement;
+          if (element) {
+            // Log element found and check visibility
+            const visible = this.isVisible(element);
+            (window as any).logBot(`[Caption] Found element with selector "${selector}" - visible: ${visible}, display: ${getComputedStyle(element).display}`);
+            
+            // For caption containers, accept the element even if not strictly visible
+            // The container might be in DOM but hidden until captions actually appear
+            (window as any).logBot(`[Caption] Using caption container from selector: ${selector}`);
+            this.captionContainer = element;
+            return element;
+          }
+        } catch (e: any) {
+          // Selector might be invalid, continue to next
+          (window as any).logBot(`[Caption] Selector "${selector}" threw error: ${e.message}`);
+        }
+      }
+      
+      if (attempt < retries - 1) {
+        (window as any).logBot(`[Caption] No caption container found. Retrying in ${delay}ms... (Attempt ${attempt + 2}/${retries})`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    (window as any).logBot(`[Caption] Warning: Could not find caption container after ${retries} attempts`);
+    return null;
+  }
+
+  /**
+   * Check if element is visible
+   */
+  private isVisible(element: HTMLElement): boolean {
+    const cs = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      cs.display !== 'none' &&
+      cs.visibility !== 'hidden' &&
+      cs.opacity !== '0'
+    );
+  }
+
+  /**
+   * Start monitoring captions with periodic extraction (every 5 seconds)
+   */
+  startCaptionMonitoring(
+    captionContainer: HTMLElement,
+    onCaptionSegment: (segment: any) => void,
+    getCurrentSpeaker?: () => string
+  ): void {
+    if (!captionContainer) {
+      (window as any).logBot('[Caption] Error: No caption container provided');
+      return;
+    }
+
+    // Initialize session start time
+    if (!this.sessionStartTime) {
+      this.sessionStartTime = Date.now();
+    }
+
+    (window as any).logBot('[Caption] Starting periodic caption extraction (every 5 seconds)');
+
+    // Periodic extraction: check for new captions every 5 seconds
+    // This gives Google Meet time to finalize the text before we capture it
+    const extractionInterval = setInterval(() => {
+      this.processCaptionChange(captionContainer, onCaptionSegment, getCurrentSpeaker);
+    }, 5000); // Extract every 5 seconds
+
+    // Store interval ID for cleanup
+    (this as any).extractionInterval = extractionInterval;
+
+    // Also do initial extraction immediately
+    this.processCaptionChange(captionContainer, onCaptionSegment, getCurrentSpeaker);
+
+    (window as any).logBot('[Caption] Periodic caption extraction started (every 5 seconds)');
+  }
+
+  /**
+   * Process caption change and extract data
+   */
+  private processCaptionChange(
+    captionContainer: HTMLElement,
+    onCaptionSegment: (segment: any) => void,
+    getCurrentSpeaker?: () => string
+  ): void {
+    try {
+      const captionData = this.extractCaptionData(captionContainer);
+      
+      if (!captionData || !captionData.text) {
+        return; // No caption text found
+      }
+
+      // Simple deduplication: only skip if EXACTLY the same text
+      if (captionData.text === this.lastCaptionText) {
+        (window as any).logBot(`[Caption] Skipping exact duplicate text`);
+        return;
+      }
+      
+      // Each 5-second extraction is a new snapshot - don't try to be smart about cumulative updates
+      (window as any).logBot(`[Caption] Extracting 5-second snapshot`)
+
+      // Get current speaker from external speaker detection if available
+      if (getCurrentSpeaker && typeof getCurrentSpeaker === 'function') {
+        try {
+          const detectedSpeaker = getCurrentSpeaker();
+          if (detectedSpeaker && detectedSpeaker !== 'Unknown Speaker') {
+            this.currentSpeaker = detectedSpeaker;
+          }
+        } catch (e: any) {
+          // Fallback to caption speaker or unknown
+        }
+      }
+
+      // Use speaker from caption if available, otherwise use detected speaker
+      const speaker = captionData.speaker || this.currentSpeaker;
+
+      // Calculate timestamps - each 5-second snapshot gets a NEW time window
+      const currentTime = Date.now();
+      const startTime = currentTime - 5000; // Segment represents the last 5 seconds
+      const endTime = currentTime;
+
+      // Create transcription segment
+      const segment = {
+        id: this.captionSegmentId++,
+        text: captionData.text,
+        speaker: speaker,
+        start: startTime,
+        end: endTime,
+        completed: true
+      };
+
+      // Update tracking
+      this.lastCaptionText = captionData.text;
+      this.lastCaptionTimestamp = currentTime;
+
+      // Send segment to callback
+      onCaptionSegment(segment);
+
+      (window as any).logBot(`[Caption] ${speaker}: ${captionData.text}`);
+
+    } catch (error: any) {
+      (window as any).logBot(`[Caption] Error processing caption: ${error.message}`);
+    }
+  }
+
+  /**
+   * Extract caption text and speaker from DOM
+   */
+  private extractCaptionData(captionContainer: HTMLElement): { text: string; speaker: string | null } | null {
+    try {
+      let captionText = '';
+      let speakerName: string | null = null;
+
+      // Google Meet caption structure (as of 2024):
+      // Container has multiple caption entries, we want the LAST (most recent) one
+      // Each entry: <div class="nMcdL bj4p3b">
+      //   - Speaker info container: <div> with <img> (avatar) and name span
+      //   - Text: <div class="ygicle VbkSUe">Caption text here</div>
+      
+      // Find all caption entries (individual caption blocks)
+      const captionEntries = captionContainer.querySelectorAll('.nMcdL, .bj4p3b, [class*="nMcdL"]');
+      
+      let targetEntry: HTMLElement | null = null;
+      
+      if (captionEntries.length > 0) {
+        // Get the last (most recent) caption entry
+        targetEntry = captionEntries[captionEntries.length - 1] as HTMLElement;
+      } else {
+        // Fallback: use the container itself if no entries found
+        targetEntry = captionContainer;
+      }
+
+      if (!targetEntry) {
+        return null;
+      }
+
+      // ROBUST APPROACH: Extract caption text first (it's easier to identify)
+      // Try multiple selectors for caption text
+      const textSelectors = [
+        '.ygicle',          // Primary Google Meet caption text class
+        '.VbkSUe',          // Secondary caption text class  
+        '.ygicle.VbkSUe',   // Combined classes
+        'div.ygicle',       // Specific div with caption class
+        '[class*="ygicle"]' // Partial match
+      ];
+
+      let captionTextElement: HTMLElement | null = null;
+
+      for (const selector of textSelectors) {
+        try {
+          const textElement = targetEntry.querySelector(selector) as HTMLElement;
+          if (textElement) {
+            captionText = textElement.textContent?.trim() || '';
+            if (captionText) {
+              captionTextElement = textElement;
+              (window as any).logBot(`[Caption] Found text using selector ${selector}: ${captionText.substring(0, 50)}...`);
+              break;
+            }
+          }
+        } catch (e) {
+          // Try next selector
+        }
+      }
+
+      // ROBUST SPEAKER EXTRACTION:
+      // Strategy 1: Find the container with avatar image, then get adjacent text
+      // This is more robust as avatar images are structural elements
+      const avatarImg = targetEntry.querySelector('img[src*="googleusercontent.com"]') as HTMLImageElement;
+      
+      if (avatarImg) {
+        (window as any).logBot(`[Caption] Found avatar image, searching for speaker name nearby...`);
+        
+        // The speaker name is typically in a sibling div next to or near the image
+        // Look for text in the same parent or nearby containers, excluding the caption text
+        let searchRoot = avatarImg.parentElement;
+        let attempts = 0;
+        
+        // Walk up the DOM tree a bit to find the common parent
+        while (searchRoot && attempts < 3) {
+          // Get all text content from this level
+          const textNodes: string[] = [];
+          
+          // Find all text-containing elements
+          const allElements = searchRoot.querySelectorAll('*');
+          allElements.forEach((el: Element) => {
+            const element = el as HTMLElement;
+            // Skip if this is the caption text element
+            if (captionTextElement && (element === captionTextElement || captionTextElement.contains(element))) {
+              return;
+            }
+            
+            // Get direct text content (not from children)
+            const text = Array.from(element.childNodes)
+              .filter((node: ChildNode) => node.nodeType === Node.TEXT_NODE)
+              .map((node: ChildNode) => node.textContent?.trim() || '')
+              .join(' ')
+              .trim();
+            
+            if (text && text.length > 0 && text.length < 100) {
+              textNodes.push(text);
+            }
+            
+            // Also check spans with text content (likely speaker name)
+            if (element.tagName === 'SPAN' && element.childNodes.length > 0) {
+              const spanText = element.textContent?.trim() || '';
+              if (spanText && spanText.length > 0 && spanText.length < 100 && 
+                  spanText !== captionText && !textNodes.includes(spanText)) {
+                textNodes.push(spanText);
+              }
+            }
+          });
+          
+          // Filter out empty strings and the caption text
+          const candidateNames = textNodes.filter(text => 
+            text !== captionText && 
+            text.length > 0 && 
+            text.length < 100 &&
+            !text.includes('googleusercontent.com') // Exclude URLs
+          );
+          
+          if (candidateNames.length > 0) {
+            // Usually the first valid text near an avatar is the speaker name
+            speakerName = candidateNames[0];
+            (window as any).logBot(`[Caption] Found speaker name near avatar: ${speakerName}`);
+            break;
+          }
+          
+          searchRoot = searchRoot.parentElement;
+          attempts++;
+        }
+      }
+      
+      // Strategy 2: Fallback to finding text elements that are NOT the caption text
+      if (!speakerName && captionTextElement) {
+        (window as any).logBot(`[Caption] Avatar method failed, trying structural text extraction...`);
+        
+        // Get all text from the entry
+        const allText = targetEntry.textContent?.trim() || '';
+        
+        // If the entry contains more text than just the caption, the extra text is likely the speaker
+        if (allText !== captionText) {
+          // Try to extract the speaker name by removing the caption text
+          let possibleSpeaker = allText.replace(captionText, '').trim();
+          
+          // Clean up any extra whitespace
+          possibleSpeaker = possibleSpeaker.replace(/\s+/g, ' ').trim();
+          
+          // Check if it looks like a reasonable name (not too long, not empty)
+          if (possibleSpeaker && possibleSpeaker.length > 0 && possibleSpeaker.length < 100) {
+            speakerName = possibleSpeaker;
+            (window as any).logBot(`[Caption] Extracted speaker by text diff: ${speakerName}`);
+          }
+        }
+      }
+      
+      // Strategy 3: Last resort - try class-based selectors (less robust but better than nothing)
+      if (!speakerName) {
+        (window as any).logBot(`[Caption] Structural methods failed, falling back to class selectors...`);
+        
+        const speakerSelectors = [
+          '.NWpY1d',          // Primary Google Meet speaker class (less robust)
+          '.adE6rb .NWpY1d',  // Nested speaker
+          'span.NWpY1d',      // Specific span with speaker class
+          '.speaker-name',    // Generic speaker class
+          '[data-speaker-name]' // Data attribute
+        ];
+
+        for (const selector of speakerSelectors) {
+          try {
+            const speakerElement = targetEntry.querySelector(selector) as HTMLElement;
+            if (speakerElement) {
+              speakerName = speakerElement.textContent?.trim() || null;
+              if (speakerName) {
+                (window as any).logBot(`[Caption] Found speaker using fallback selector ${selector}: ${speakerName}`);
+                break;
+              }
+            }
+          } catch (e) {
+            // Try next selector
+          }
+        }
+      }
+
+      // Filter out empty or very short captions
+      if (!captionText || captionText.length < 2) {
+        (window as any).logBot(`[Caption] Skipping empty or short caption: "${captionText}"`);
+        return null;
+      }
+
+      (window as any).logBot(`[Caption] Extracted: Speaker="${speakerName}", Text="${captionText.substring(0, 50)}..."`);
+
+      return {
+        text: captionText,
+        speaker: speakerName
+      };
+
+    } catch (error: any) {
+      (window as any).logBot(`[Caption] Error extracting caption data: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get session start time
+   */
+  getSessionStartTime(): number | null {
+    return this.sessionStartTime;
+  }
+
+  /**
+   * Stop monitoring captions and cleanup
+   */
+  stopMonitoring(): void {
+    // Clear periodic extraction interval
+    const interval = (this as any).extractionInterval;
+    if (interval) {
+      clearInterval(interval);
+      (this as any).extractionInterval = null;
+      (window as any).logBot('[Caption] Stopped periodic caption extraction');
+    }
+    
+    if (this.mutationObserver) {
+      this.mutationObserver.disconnect();
+      this.mutationObserver = null;
+    }
+  }
+
+  /**
+   * Set current speaker manually (for integration with speaker detection)
+   */
+  setCurrentSpeaker(speaker: string): void {
+    this.currentSpeaker = speaker;
+  }
+}

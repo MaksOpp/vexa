@@ -18,6 +18,7 @@ let currentConnectionId: string | null = null;
 let botManagerCallbackUrl: string | null = null; // ADDED: To store callback URL
 let currentPlatform: "google_meet" | "zoom" | "teams" | undefined;
 let page: Page | null = null; // Initialize page, will be set in runBot
+let lastCaptionLogTime: number = 0; // Track last time we logged caption publish (to reduce spam)
 
 // --- ADDED: Flag to prevent multiple shutdowns ---
 let isShuttingDown = false;
@@ -26,6 +27,10 @@ let isShuttingDown = false;
 // --- ADDED: Redis subscriber client ---
 let redisSubscriber: RedisClientType | null = null;
 // -----------------------------------
+
+// --- ADDED: Redis publisher client (separate from subscriber) ---
+let redisPublisher: RedisClientType | null = null;
+// -------------------------------------------------------------
 
 // --- ADDED: Browser instance ---
 let browserInstance: Browser | null = null;
@@ -284,7 +289,17 @@ async function performGracefulLeave(
         await redisSubscriber.quit();
         log("[Graceful Leave] Redis subscriber disconnected.");
     } catch (err) {
-        log(`[Graceful Leave] Error closing Redis connection: ${err}`);
+        log(`[Graceful Leave] Error closing Redis subscriber: ${err}`);
+    }
+  }
+
+  if (redisPublisher && redisPublisher.isOpen) {
+    log("[Graceful Leave] Disconnecting Redis publisher...");
+    try {
+        await redisPublisher.quit();
+        log("[Graceful Leave] Redis publisher disconnected.");
+    } catch (err) {
+        log(`[Graceful Leave] Error closing Redis publisher: ${err}`);
     }
   }
 
@@ -345,16 +360,16 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
     try {
       redisSubscriber = createClient({ url: currentRedisUrl });
 
-      redisSubscriber.on('error', (err) => log(`Redis Client Error: ${err}`));
+      redisSubscriber.on('error', (err) => log(`Redis Subscriber Error: ${err}`));
       // ++ ADDED: Log connection events ++
-      redisSubscriber.on('connect', () => log('[DEBUG] Redis client connecting...'));
-      redisSubscriber.on('ready', () => log('[DEBUG] Redis client ready.'));
-      redisSubscriber.on('reconnecting', () => log('[DEBUG] Redis client reconnecting...'));
-      redisSubscriber.on('end', () => log('[DEBUG] Redis client connection ended.'));
+      redisSubscriber.on('connect', () => log('[DEBUG] Redis subscriber connecting...'));
+      redisSubscriber.on('ready', () => log('[DEBUG] Redis subscriber ready.'));
+      redisSubscriber.on('reconnecting', () => log('[DEBUG] Redis subscriber reconnecting...'));
+      redisSubscriber.on('end', () => log('[DEBUG] Redis subscriber connection ended.'));
       // ++++++++++++++++++++++++++++++++++
 
       await redisSubscriber.connect();
-      log(`Connected to Redis at ${currentRedisUrl}`);
+      log(`Redis subscriber connected at ${currentRedisUrl}`);
 
       const commandChannel = `bot_commands:${currentConnectionId}`;
       // Pass the page object when subscribing
@@ -375,6 +390,25 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
   } else {
     log("Redis URL or Connection ID missing, skipping Redis setup.");
   }
+
+  // --- ADDED: Setup Redis Publisher (separate client for publishing) ---
+  if (currentRedisUrl) {
+    log("Setting up Redis publisher for caption data...");
+    try {
+      redisPublisher = createClient({ url: currentRedisUrl });
+
+      redisPublisher.on('error', (err) => log(`Redis Publisher Error: ${err}`));
+
+      await redisPublisher.connect();
+      log(`Redis publisher connected at ${currentRedisUrl}`);
+
+    } catch (err) {
+      log(`*** Failed to connect Redis publisher: ${err} ***`);
+      redisPublisher = null;
+    }
+  }
+  // ------------------------------------------------------------------
+
   // -------------------------------------------------
 
   // Simple browser setup like simple-bot.js
@@ -439,6 +473,39 @@ export async function runBot(botConfig: BotConfig): Promise<void> {
     }
   });
   // --- ----------------------------------------------------------------------- ---
+
+  // --- ADDED: Expose function for browser to publish captions to Redis ---
+  await page.exposeFunction("publishCaptionToRedis", async (captionData: string) => {
+    try {
+      const message = JSON.parse(captionData);
+      
+      // Use the dedicated publisher client (not the subscriber!)
+      if (redisPublisher && redisPublisher.isOpen) {
+        const streamKey = process.env.REDIS_STREAM_KEY || 'transcription_segments';
+        
+        // transcription-collector expects a 'payload' field containing JSON string
+        // Format: { payload: '{"type":"...","segments":[...],...}' }
+        const streamData: Record<string, string> = {
+          payload: captionData  // Send the entire message as JSON string in 'payload' field
+        };
+        
+        // Publish to Redis stream using the publisher client
+        await redisPublisher.xAdd(streamKey, '*', streamData);
+        
+        // Log successful publish (reduce spam - log every 5 seconds max)
+        const now = Date.now();
+        if (!lastCaptionLogTime || now - lastCaptionLogTime > 5000) {
+          log(`[Caption→Redis] Published caption segment to ${streamKey}`);
+          lastCaptionLogTime = now;
+        }
+      } else {
+        log('[Caption→Redis] Warning: Redis publisher not available, cannot publish caption');
+      }
+    } catch (error: any) {
+      log(`[Caption→Redis] Error publishing caption to Redis: ${error.message}`);
+    }
+  });
+  // --- ------------------------------------------------------------------- ---
 
   // Setup anti-detection measures
   await page.addInitScript(() => {

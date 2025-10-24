@@ -213,7 +213,7 @@ else
     echo_info "API Token likely created. Parsed Key: $USER_API_KEY (Install jq for better parsing)"
 fi
 
-# --- 3. Request Google Meet ID ---
+# --- 3. Request Google Meet ID and Language ---
 if [[ -n "$1" ]]; then
     # If meeting ID provided as command line argument
     GOOGLE_MEET_ID="$1"
@@ -231,6 +231,22 @@ else
     done
 fi
 
+# Check for optional language parameter (second argument)
+CAPTION_LANGUAGE=""
+if [[ -n "$2" ]]; then
+    CAPTION_LANGUAGE="$2"
+    echo_info "Using caption language: $CAPTION_LANGUAGE"
+else
+    # Optional interactive prompt for language
+    read -p "Enter caption language code (e.g., en, es, fr) or press Enter to use default: " INPUT_LANGUAGE
+    if [[ -n "$INPUT_LANGUAGE" ]]; then
+        CAPTION_LANGUAGE="$INPUT_LANGUAGE"
+        echo_info "Using caption language: $CAPTION_LANGUAGE"
+    else
+        echo_info "Using default caption language"
+    fi
+fi
+
 # Validate the meeting ID format
 if [[ "$GOOGLE_MEET_ID" =~ ^[a-zA-Z]{3}-[a-zA-Z]{4}-[a-zA-Z]{3}$ ]]; then
     MEETING_ID_TO_STOP="$GOOGLE_MEET_ID" # Set for trap
@@ -242,7 +258,20 @@ fi
 
 # --- 4. Send Bot to Meeting ---
 echo_info "Requesting bot '$BOT_NAME' for Google Meet ID: $GOOGLE_MEET_ID"
-REQUEST_BOT_PAYLOAD=$(cat <<-END
+
+# Build JSON payload conditionally based on whether language is set
+if [[ -n "$CAPTION_LANGUAGE" ]]; then
+    REQUEST_BOT_PAYLOAD=$(cat <<-END
+{
+  "platform": "$PLATFORM",
+  "native_meeting_id": "$GOOGLE_MEET_ID",
+  "bot_name": "$BOT_NAME",
+  "language": "$CAPTION_LANGUAGE"
+}
+END
+)
+else
+    REQUEST_BOT_PAYLOAD=$(cat <<-END
 {
   "platform": "$PLATFORM",
   "native_meeting_id": "$GOOGLE_MEET_ID",
@@ -250,6 +279,7 @@ REQUEST_BOT_PAYLOAD=$(cat <<-END
 }
 END
 )
+fi
 
 # Use BASE_URL for user actions
 REQUEST_BOT_RESPONSE=$(curl -s -X POST \

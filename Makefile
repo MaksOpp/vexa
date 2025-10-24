@@ -250,9 +250,15 @@ test: check_docker
 	fi
 	@if [ -n "$(MEETING_ID)" ]; then \
 		echo "---> Using provided meeting ID: $(MEETING_ID)"; \
-		./testing/run_vexa_interaction.sh "$(MEETING_ID)"; \
+		if [ -n "$(LANGUAGE)" ]; then \
+			echo "---> Using caption language: $(LANGUAGE)"; \
+			./testing/run_vexa_interaction.sh "$(MEETING_ID)" "$(LANGUAGE)"; \
+		else \
+			./testing/run_vexa_interaction.sh "$(MEETING_ID)"; \
+		fi; \
 	else \
 		echo "---> No meeting ID provided. Use 'make test MEETING_ID=abc-defg-hij' to test with a specific meeting."; \
+		echo "---> Optional: Add LANGUAGE=es (or other code) to set caption language."; \
 		echo "---> Running in interactive mode..."; \
 		./testing/run_vexa_interaction.sh; \
 	fi
@@ -404,3 +410,27 @@ migration-status: check_docker
 	@docker compose exec -T transcription-collector alembic -c /app/alembic.ini history --verbose
 
 # --- End Database Migration Commands ---
+
+# --- Transcription Viewer ---
+
+# Start the real-time transcription viewer
+start-viewer:
+	@echo "---> Starting transcription viewer on port 8090..."
+	@echo "---> Open http://localhost:8090 in your browser"
+	@if [ ! -d services/transcription-viewer ]; then \
+		echo "ERROR: services/transcription-viewer directory not found"; \
+		exit 1; \
+	fi
+	@if [ ! -f services/transcription-viewer/requirements.txt ]; then \
+		echo "ERROR: requirements.txt not found in services/transcription-viewer"; \
+		exit 1; \
+	fi
+	@echo "---> Checking Python dependencies..."
+	@cd services/transcription-viewer && \
+	if [ ! -d .venv ]; then \
+		echo "Creating virtual environment..."; \
+		python3 -m venv .venv; \
+	fi && \
+	. .venv/bin/activate && \
+	pip install -q -r requirements.txt && \
+	python -m uvicorn server:app --reload --port 8090
