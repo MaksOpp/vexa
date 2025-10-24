@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Transcription Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 30px;
+            margin-bottom: 20px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #333;
+            font-size: 0.9rem;
+        }
+
+        input, select {
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #dc2626;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px;
+            background: #f3f4f6;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #9ca3af;
+        }
+
+        .status-indicator.connecting {
+            background: #fbbf24;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.active {
+            background: #10b981;
+        }
+
+        .status-indicator.error {
+            background: #ef4444;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .status-text {
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .transcription-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            min-height: 500px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .transcription-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .transcription-header h2 {
+            color: #1f2937;
+        }
+
+        .segment-count {
+            background: #667eea;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .transcription-content {
+            font-size: 1rem;
+            line-height: 1.8;
+            color: #1f2937;
+        }
+
+        .transcript-line {
+            margin-bottom: 12px;
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .transcript-line .timestamp {
+            color: #6b7280;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+
+        .transcript-line .speaker {
+            color: #667eea;
+            font-weight: 700;
+            margin: 0 5px;
+        }
+
+        .transcript-line .text {
+            color: #1f2937;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #9ca3af;
+        }
+
+        .empty-state-icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+
+        .empty-state h3 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+
+        .empty-state p {
+            font-size: 1rem;
+        }
+
+        .help-text {
+            background: #fef3c7;
+            border: 1px solid #fcd34d;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #92400e;
+        }
+
+        .help-text strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        /* Scrollbar styling */
+        .transcription-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .transcription-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        .transcription-container::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 4px;
+        }
+
+        .transcription-container::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📝 Real-time Transcription Viewer</h1>
+            <p>View live transcriptions from Google Meet using AG-UI protocol</p>
+        </div>
+
+        <div class="card">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="meetingId">Meeting ID *</label>
+                    <input 
+                        type="text" 
+                        id="meetingId" 
+                        placeholder="e.g., tzo-qcxv-sbo"
+                        required
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label for="language">Language</label>
+                    <input 
+                        type="text" 
+                        id="language" 
+                        placeholder="e.g., pl, en, es"
+                        value=""
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label for="platform">Platform</label>
+                    <select id="platform">
+                        <option value="google_meet">Google Meet</option>
+                        <option value="teams">Microsoft Teams</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button class="btn-primary" id="startBtn" onclick="startTranscription()">
+                    🚀 Start Transcription
+                </button>
+                <button class="btn-danger" id="stopBtn" onclick="stopTranscription()" disabled>
+                    ⏹️ Stop
+                </button>
+            </div>
+
+            <div class="help-text">
+                <strong>💡 Quick Start:</strong>
+                1. Make sure your transcription service is running: <code>make up</code><br>
+                2. Start a bot: <code>make test MEETING_ID=xxx-xxxx-xxx LANGUAGE=pl</code><br>
+                3. Enter the meeting ID and language above<br>
+                4. Click "Start Transcription"
+            </div>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-indicator" id="statusIndicator"></div>
+            <span class="status-text" id="statusText">Ready to connect</span>
+        </div>
+
+        <div class="transcription-container">
+            <div class="transcription-header">
+                <h2>Live Transcription</h2>
+                <span class="segment-count" id="segmentCount">0 segments</span>
+            </div>
+            <div class="transcription-content" id="transcriptionContent">
+                <div class="empty-state">
+                    <div class="empty-state-icon">🎤</div>
+                    <h3>No transcription yet</h3>
+                    <p>Enter meeting details above and click "Start Transcription" to begin</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let segmentCount = 0;
+
+        function updateStatus(status, message) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            
+            indicator.className = 'status-indicator ' + status;
+            text.textContent = message;
+        }
+
+        function addTranscriptLine(delta) {
+            const content = document.getElementById('transcriptionContent');
+            const emptyState = content.querySelector('.empty-state');
+            
+            // Remove empty state if present
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            // Parse the delta to extract timestamp, speaker, and text
+            const line = delta.trim();
+            if (!line) return;
+
+            // Create new transcript line
+            const lineDiv = document.createElement('div');
+            lineDiv.className = 'transcript-line';
+            lineDiv.textContent = line;
+            
+            content.appendChild(lineDiv);
+            
+            // Update segment count
+            segmentCount++;
+            document.getElementById('segmentCount').textContent = `${segmentCount} segments`;
+            
+            // Auto-scroll to bottom
+            content.scrollTop = content.scrollHeight;
+        }
+
+        function clearTranscription() {
+            const content = document.getElementById('transcriptionContent');
+            content.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🎤</div>
+                    <h3>No transcription yet</h3>
+                    <p>Enter meeting details above and click "Start Transcription" to begin</p>
+                </div>
+            `;
+            segmentCount = 0;
+            document.getElementById('segmentCount').textContent = '0 segments';
+        }
+
+        function startTranscription() {
+            const meetingId = document.getElementById('meetingId').value.trim();
+            const language = document.getElementById('language').value.trim();
+            const platform = document.getElementById('platform').value;
+
+            // Validation
+            if (!meetingId) {
+                alert('Please enter a Meeting ID');
+                return;
+            }
+
+            // Clear previous transcription
+            clearTranscription();
+
+            // Build SSE URL
+            let url = `/transcribe?meeting_id=${encodeURIComponent(meetingId)}&platform=${encodeURIComponent(platform)}`;
+            if (language) {
+                url += `&language=${encodeURIComponent(language)}`;
+            }
+
+            // Update UI
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            updateStatus('connecting', 'Connecting to transcription service...');
+
+            // Create EventSource connection
+            eventSource = new EventSource(url);
+
+            eventSource.onopen = () => {
+                console.log('SSE connection opened');
+            };
+
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received event:', data.type);
+
+                    switch (data.type) {
+                        case 'RUN_STARTED':
+                            updateStatus('active', 'Connected - streaming transcriptions...');
+                            break;
+
+                        case 'TEXT_MESSAGE_CHUNK':
+                            if (data.delta) {
+                                addTranscriptLine(data.delta);
+                            }
+                            break;
+
+                        case 'RUN_FINISHED':
+                            updateStatus('', 'Transcription completed');
+                            stopTranscription();
+                            break;
+
+                        case 'RUN_ERROR':
+                            updateStatus('error', 'Error: ' + (data.message || 'Unknown error'));
+                            console.error('Transcription error:', data.message);
+                            stopTranscription();
+                            break;
+
+                        default:
+                            console.log('Unknown event type:', data.type);
+                    }
+                } catch (e) {
+                    console.error('Error parsing event data:', e);
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('SSE error:', error);
+                updateStatus('error', 'Connection error - check console');
+                stopTranscription();
+            };
+        }
+
+        function stopTranscription() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            updateStatus('', 'Stopped');
+        }
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+    </script>
+</body>
+</html>
+
